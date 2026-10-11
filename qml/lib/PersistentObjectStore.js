@@ -41,10 +41,20 @@ function reset() {
                 );
 }
 
+// Only data properties belong in the database. QML objects such as Connections
+// are runtime infrastructure and may also be read-only when loading them back.
+function isPersistentProperty(obj, key) {
+    var skippedAttributes = ['objectName', 'doPersist', 'storeSettings'];
+    return skippedAttributes.indexOf(key) === -1
+            && key.charAt(0) !== '_'
+            && key.lastIndexOf('on', 0) !== 0
+            && typeof obj[key] !== 'function'
+            && !Qt.isQtObject(obj[key]);
+}
+
 function save(obj, keys) {
     db.transaction(function (tx) {
                     // Save all fields
-                    var skippedAttributes = ['objectName', 'doPersist', 'storeSettings', '_loaded', 'reset'];
                     var haskeys = !!keys;
                     if(!haskeys) {
                         // Clean all fields of this settings object first, so the DB is always clean from unused fields
@@ -52,7 +62,7 @@ function save(obj, keys) {
                         keys = Object.keys(obj);
                     }
                     for(var i = 0; i < keys.length; i +=1) {
-                        if(skippedAttributes.indexOf(keys[i]) > -1 || keys[i].lastIndexOf('on', 0) === 0) {
+                        if(!isPersistentProperty(obj, keys[i])) {
                             continue;
                         }
                         var value = JSON.stringify(obj[keys[i]]);
@@ -66,7 +76,10 @@ function save(obj, keys) {
                 });
 }
 
-function saveKey(obj, key) { // convenience method to more quickly save just one key (without checks!)
+function saveKey(obj, key) { // convenience method to save just one data property
+    if(!isPersistentProperty(obj, key)) {
+        return;
+    }
     db.transaction(function (tx) {
                     tx.executeSql('REPLACE INTO settings (settingsName, keyName, value) VALUES (?, ?, ?);', [obj.objectName, key, JSON.stringify(obj[key])]);
                 });
@@ -78,12 +91,12 @@ function load(obj) {
 
                     // Load fields
                     for (var fieldName in obj) {
-                        //values starting with 'on' should be blatantly ignored
-                        if (fieldName.lastIndexOf('on', 0) !== 0) {
+                        // Also ignore runtime fields left by earlier versions.
+                        if (isPersistentProperty(obj, fieldName)) {
 
                             var rs = tx.executeSql('SELECT value FROM settings WHERE settingsName=? AND keyName=?;', [obj.objectName, fieldName]);
 
-                            if (rs.rows.length > 0 && fieldName !== 'doPersist') {
+                            if (rs.rows.length > 0) {
                                 obj[fieldName] = JSON.parse(rs.rows.item(0).value);
                                 //                        console.log("Loaded: " + obj.objectName + "." + fieldName + ". New value: " + JSON.stringify(obj[fieldName]));
                             }// else { console.log("Not loaded: " + obj.objectName + "." + fieldName + ". Current value:" + obj[fieldName] + "("+typeof obj[fieldName]+")"); }

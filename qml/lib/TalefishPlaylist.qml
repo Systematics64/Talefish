@@ -32,6 +32,7 @@ Playlist {
     property int totalPosition: 0
 
     property string pathsIdentifier // pathsIdentifier is for saving current progress
+    property bool changingPlaylist: false
     readonly property Timer durationListTimer: Timer {
         // we want to debounce some operations to reduce double work
         interval: 100
@@ -42,7 +43,7 @@ Playlist {
     onCurrentIndexChanged: {
         // console.log('currentIndex', currentIndex, audio.error)
         // when played through, we want to activate the first track again
-        if(currentIndex === -1 && metadata.count > 0 && !audio.error) {
+        if(!changingPlaylist && currentIndex === -1 && metadata.count > 0 && !audio.error) {
             audio.pause();
             currentIndex = 0;
             // total position stays at "100%" by default, which is nice and correct but may be seen as inconsistent
@@ -136,53 +137,71 @@ Playlist {
             items:[]
         }
         for(var i=0; i < playlist.metadata.count; i++) {
-            json.items.push(playlist.metadata.get(i))
+            // ListModel.get() returns a live object that becomes invalid on clear().
+            var item = playlist.metadata.get(i);
+            json.items.push({
+                path: item.path,
+                artist: item.artist,
+                title: item.title,
+                album: item.album,
+                duration: item.duration,
+                previousDurations: item.previousDurations
+            });
         }
         return json
     }
     function fromJSON(json, enqueue, directory) { //directory overrides pathsIdentifier to display progress in file selector
-        if (enqueue && playlist.metadata.count === 0) {
-            enqueue = false;
-        }
-        if (!enqueue) {
-            audio.stop();
-            playlist.clear();
-            playlist.metadata.clear();
-        }
-
-        var i; //we reuse i as a general-purpose iterator
-
-        if (!json.items) {// case 1: json is just an array of urls (opening files etc)
-            totalDuration = 0;
-            for(i=0; i < json.length; i++) {
-                var source = Qt.resolvedUrl(json[i].replace(/#/g, '%23'));
-                playlist.addItem(source);
-                metadata.append({path:json[i], artist:'', title:'', album:'', duration:0, previousDurations:0});
-                taglib.getFileTagInfos(json[i], metadata.count - 1, false);
+        // stop() and clear() emit position/index changes for the old playlist.
+        // Preserve its last position before rebuilding, then ignore those signals.
+        saveCurrentPosition();
+        changingPlaylist = true;
+        try {
+            if (enqueue && playlist.metadata.count === 0) {
+                enqueue = false;
             }
-        } else {// case 2: json is prefilled
-            totalDuration = json.totalDuration;
-            for(i=0; i < json.items.length; i++) {
-                playlist.addItem(Qt.resolvedUrl(json.items[i].path.replace(/#/g, '%23')));
-                metadata.append(json.items[i]);
+            if (!enqueue) {
+                audio.stop();
+                playlist.clear();
+                playlist.metadata.clear();
             }
-            pathsIdentifier = json.pathsIdentifier;
-        }
 
-        if(directory && !enqueue) {
-            pathsIdentifier = directory;
-        } else if(!json.pathsIdentifier) {
-            var pathsArray = [];
-            for(i=0; i < metadata.count; i++) {
-                pathsArray.push(metadata.get(i).path);
+            var i; //we reuse i as a general-purpose iterator
+
+            if (!json.items) {// case 1: json is just an array of urls (opening files etc)
+                totalDuration = 0;
+                for(i=0; i < json.length; i++) {
+                    var source = Qt.resolvedUrl(json[i].replace(/#/g, '%23'));
+                    playlist.addItem(source);
+                    metadata.append({path:json[i], artist:'', title:'', album:'', duration:0, previousDurations:0});
+                    taglib.getFileTagInfos(json[i], metadata.count - 1, false);
+                }
+            } else {// case 2: json is prefilled
+                totalDuration = json.totalDuration;
+                for(i=0; i < json.items.length; i++) {
+                    playlist.addItem(Qt.resolvedUrl(json.items[i].path.replace(/#/g, '%23')));
+                    metadata.append(json.items[i]);
+                }
+                pathsIdentifier = json.pathsIdentifier;
             }
-            pathsIdentifier = pathsArray.join('|');
-        }
 
-        if(!enqueue) {
-            applySavedPosition();
+            if(directory && !enqueue) {
+                pathsIdentifier = directory;
+            } else if(!json.pathsIdentifier) {
+                var pathsArray = [];
+                for(i=0; i < metadata.count; i++) {
+                    pathsArray.push(metadata.get(i).path);
+                }
+                pathsIdentifier = pathsArray.join('|');
+            }
+
+            if(!enqueue) {
+                applySavedPosition();
+            }
+            //        console.log('opened playlist', pathsIdentifier)
+            app.state.currentPlaylist = playlist.toJSON();
+        } finally {
+            changingPlaylist = false;
         }
-        //        console.log('opened playlist', pathsIdentifier)
     }
     property bool applyingSavedPosition: false
     property int applyThisTrackPosition: -1
@@ -194,12 +213,18 @@ Playlist {
 
 
     function applySavedPosition() {
-        var position = app.state.playlistProgress[pathsIdentifier] || {position:0,index:0};
+        var firstItem = metadata.count > 0 ? metadata.get(0) : null;
+        var position = app.state.playlistProgress[pathsIdentifier]
+                || (firstItem && app.state.playlistProgress[firstItem.path])
+                || {position:0,index:0};
         app.playerCommands.seek(position.position, position.index);
         totalPosition = currentMetaData.previousDurations + position.position
     }
 
     function saveCurrentPosition(){
+        if(changingPlaylist || applyingSavedPosition) {
+            return;
+        }
         var position = {
             index: playlist.currentIndex,
             position: audio.displayPosition,
@@ -208,8 +233,24 @@ Playlist {
             lastAccess: new Date().getTime()
         }
         if(position.index > -1 && position.totalPosition > 1) {
-            //            totalPosition = position.totalPosition;
-            app.state.playlistProgress[pathsIdentifier] = position;
+            var progress = {};
+            for(var key in app.state.playlistProgress) {
+                progress[key] = app.state.playlistProgress[key];
+            }
+            progress[pathsIdentifier] = position;
+            // File rows use the file path, even when playback uses a directory
+            // or a selection of several files as its playlist identifier.
+            var item = currentMetaData;
+            if(item.path && item.path !== pathsIdentifier) {
+                progress[item.path] = {
+                    index: 0,
+                    position: position.position,
+                    totalPosition: position.position,
+                    totalDuration: item.duration,
+                    lastAccess: position.lastAccess
+                };
+            }
+            app.state.playlistProgress = progress;
         }
     }
     readonly property Timer reseekTimer: Timer {
@@ -248,7 +289,7 @@ Playlist {
             }
         }
         onDisplayPositionChanged: {
-            if(!playlist.applyingSavedPosition) {
+            if(!playlist.changingPlaylist && !playlist.applyingSavedPosition) {
                 totalPosition = currentMetaData.previousDurations + audio.displayPosition
                 playlist.saveCurrentPosition()
             }

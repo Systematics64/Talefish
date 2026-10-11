@@ -26,6 +26,7 @@ import "PersistentObjectStore.js" as Store
 QtObject {
     id: persistentObject
     objectName: "default"
+    signal loadCompleted()
     readonly property var storeSettings: ['Talefish','1.0','Settings', objectName]
     property bool doPersist: true
     property bool _loaded: false
@@ -33,7 +34,10 @@ QtObject {
     Component.onCompleted: {
         Store.initialize(storeSettings, LocalStorage);
 
-        doPersist && Store.load(persistentObject);
+        if(doPersist) {
+            Store.load(persistentObject);
+            persistentObject.loadCompleted();
+        }
 
 //        console.log('PersistentObjectStore QML: loaded DB', objectName)
     }

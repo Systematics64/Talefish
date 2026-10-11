@@ -86,7 +86,8 @@ ApplicationWindow
         running: options.autoSaveProgressPeriodically && audio.isPlaying
         onTriggered: {
             playlist.saveCurrentPosition();
-            app.state.saveKey('playlistProgress')
+            // Keep the playlist and directory consistent with the saved position.
+            app.state.save(['currentPlaylist', 'playlistProgress', 'lastDirectory'])
         }
     }
 

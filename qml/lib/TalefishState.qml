@@ -29,14 +29,30 @@ PersistentObject {
     property var playlistProgress: ({})
     property string lastDirectory: ''
 
-    //some logic:
-    on_LoadedChanged: {
-        var keepDays = options.keepUnopenedDirectoryProgressDays, //TODO options.keepUnopenedDirectoryProgressDays
-            keepMs = keepDays * 24 * 360000;
-        var keepAfter = new Date().getTime() - keepMs
+    // Wait for both persistent objects so the saved retention option is available.
+    onLoadCompleted: initializeAfterLoad('state')
+
+    readonly property Connections optionsConnections: Connections {
+        target: app.options
+        onLoadCompleted: initializeAfterLoad('options')
+    }
+
+    function initializeAfterLoad(trigger) {
+        console.debug('[progress-cleanup] load signal:', trigger,
+                      'state loaded:', _loaded,
+                      'options loaded:', app.options._loaded,
+                      'keep days:', app.options.keepUnopenedDirectoryProgressDays)
+        if (!_loaded || !app.options._loaded) {
+            console.debug('[progress-cleanup] waiting for both persistent objects')
+            return;
+        }
+
+        var keepDays = app.options.keepUnopenedDirectoryProgressDays,
+            keepMs = keepDays * 24 * 3600000;
         var currentPlaylist = app.state.currentPlaylist;
         if(keepDays < 9999) {
             var progress = {}
+            var removedCount = 0
             var now = new Date().getTime();
             for(var dir in playlistProgress) {
                 var el = playlistProgress[dir];
@@ -44,10 +60,15 @@ PersistentObject {
                 if(diff < keepMs || currentPlaylist.pathsIdentifier === dir){
                     progress[dir] = el;
                 } else {
-                    console.log('removing progress for ', dir);
+                    removedCount++;
                 }
             }
             playlistProgress = progress;
+            console.debug('[progress-cleanup] finished; keep days:', keepDays,
+                          'removed entries:', removedCount,
+                          'remaining entries:', Object.keys(progress).length)
+        } else {
+            console.debug('[progress-cleanup] cleanup skipped; keep days:', keepDays)
         }
         if(!app.commandLineArgumentFilesToOpen || app.commandLineArgumentDoEnqueue) {
             // load previous playlist:
