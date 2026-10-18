@@ -125,6 +125,13 @@ Playlist {
             totalDuration = totalDuration + metadataItem.duration;
         }
         playlist.totalDuration = totalDuration;
+        if(currentIndex >= 0 && currentIndex < metadata.count) {
+            var trackPosition = applyingSavedPosition ? applyThisTrackPosition : audio.displayPosition;
+            playlist.totalPosition = currentMetaData.previousDurations + trackPosition;
+            saveCurrentPosition();
+        } else {
+            playlist.totalPosition = 0;
+        }
 
         // if this is done, we can save the current playlist:
         app.state.currentPlaylist = playlist.toJSON();
@@ -213,11 +220,23 @@ Playlist {
 
 
     function applySavedPosition() {
+        if(metadata.count === 0) {
+            reSeekTimer.stop();
+            applyingSavedPosition = false;
+            applyThisTrackPosition = -1;
+            totalPosition = 0;
+            return;
+        }
         var progress = app.state.playlistProgress;
         var saved = progress[pathsIdentifier];
+        // Folder contents may have changed since this bookmark was saved.
+        if(saved && (Math.floor(saved.index) !== saved.index
+                     || saved.index < 0 || saved.index >= metadata.count)) {
+            saved = null;
+        }
         var index = saved ? saved.index : 0;
-        var item = index >= 0 && index < metadata.count ? metadata.get(index) : null;
-        var fileProgress = item && progress[item.path];
+        var item = metadata.get(index);
+        var fileProgress = progress[item.path];
         var trackPosition = saved ? saved.position : 0;
         // A chapter may have been played separately since this playlist was saved.
         // Keep its playlist index; file bookmarks always use index 0.
@@ -239,7 +258,9 @@ Playlist {
             totalDuration: totalDuration,
             lastAccess: new Date().getTime()
         }
-        if(position.index > -1 && position.totalPosition > 1) {
+        // Zero is a valid rewind position. Rebuild and pending-seek signals are
+        // excluded above; an empty playlist has no track to save.
+        if(position.index >= 0 && position.index < metadata.count && position.position >= 0) {
             var progress = {};
             for(var key in app.state.playlistProgress) {
                 progress[key] = app.state.playlistProgress[key];
