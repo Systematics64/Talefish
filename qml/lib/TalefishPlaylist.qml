@@ -213,12 +213,19 @@ Playlist {
 
 
     function applySavedPosition() {
-        var firstItem = metadata.count > 0 ? metadata.get(0) : null;
-        var position = app.state.playlistProgress[pathsIdentifier]
-                || (firstItem && app.state.playlistProgress[firstItem.path])
-                || {position:0,index:0};
-        app.playerCommands.seek(position.position, position.index);
-        totalPosition = currentMetaData.previousDurations + position.position
+        var progress = app.state.playlistProgress;
+        var saved = progress[pathsIdentifier];
+        var index = saved ? saved.index : 0;
+        var item = index >= 0 && index < metadata.count ? metadata.get(index) : null;
+        var fileProgress = item && progress[item.path];
+        var trackPosition = saved ? saved.position : 0;
+        // A chapter may have been played separately since this playlist was saved.
+        // Keep its playlist index; file bookmarks always use index 0.
+        if(fileProgress && (!saved || fileProgress.lastAccess > saved.lastAccess)) {
+            trackPosition = fileProgress.position;
+        }
+        app.playerCommands.seek(trackPosition, index);
+        totalPosition = currentMetaData.previousDurations + trackPosition
     }
 
     function saveCurrentPosition(){
